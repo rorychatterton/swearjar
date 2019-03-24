@@ -1,83 +1,52 @@
 service: SwearJar
 
 custom:
-  app_acronym: SwearJar
+  app_acronym: podcast-swearjar
   default_stage: dev
   stage: ${opt:stage, self:custom.default_stage}
   stack_name: ${self:custom.app_acronym}-${self:custom.stage}
 
+  podcast_feed: "http://feeds.feedburner.com/InvertTheWhy"
+  podcast_name: "InvertTheWhy"
+
   region: ${opt:region, self:provider.region}
-  deletion_policy: Delete
-  dynamodb_table: ${self:custom.stack_name}
-  dynamodb_arn: arn:aws:dynamodb:${self:custom.region}:*:table/${self:custom.dynamodb_table}
-  dynamodb_host: https://dynamodb.${self:custom.region}.amazonaws.com
 
   # Default to using app_acronym as bucket name
-  s3_bucket: ${opt:s3_bucket, self:custom.app_acronym}
-
-  # default to using ${stage} as key base path, keeps stages from namespace collisions
-  s3_key_base: ${opt:s3_key_base, self:custom.stage}
+  s3_bucket: ${opt:s3_bucket, self:custom.stack_name}
   s3_bucket_arn: arn:aws:s3:::${self:custom.s3_bucket}
-  s3_role_resource: ${self:custom.s3_bucket_arn}/${self:custom.s3_key_base}/*
-
-  # Put this here rather than in code (presigned URL TTL)
-  url_default_ttl: 60
+  s3_role_resource: ${self:custom.s3_bucket_arn}/*
 
   pythonRequirements:
-    useDownloadCache: true
-    useStaticCache: true
+    dockerizePip: non-linux
 
   customDomain:
     domainName: api.rc.convoy-apac.com
     stage: ${self:provider.stage}
     createRoute53Record: true
 
-  cors:
-    origins:
-      - '*'
-    headers:
-      - Content-Type
-      - x-api-token
-      - X-Amz-Date
-      - Authorization
-      - X-Api-Key
-      - X-Amz-Security-Token
-      - authorizationtoken
-      - X-Tenancy-Id
-    allowCredentials: false
-
 functions:
-
-  get_docnotes:
-    handler: src/docnote.get_docnotes_handler
-    description: Retrieve a collection of docnotes
+  PodCastTranscribePostProcessor:
+    handler: src/handlers.transcribe_postprocessor
     events:
-      - http:
-          path: docnote/v4/docnote
-          method: GET
-          cors: ${self:custom.cors}
-
+      - cloudwatchEvent:
+          event:
+            source:
+              - "aws.transcribe"
+            detail-type:
+              - "Transcribe Job State Change"
+            detail:
+              TranscriptionJobStatus:
+                - COMPLETED
+                - FAIL
+              TranscriptionJobName:
+                - "${self:custom.stack_name}-*"
 
 resources:
   Resources:
-
-    assetDynamoDbTable:
-      Type: 'AWS::DynamoDB::Table'
-      DeletionPolicy: ${self:custom.deletion_policy}
+    S3Bucket:
+      Type: AWS::S3::Bucket
       Properties:
-        AttributeDefinitions:
-          -
-            AttributeName: asset_id
-            AttributeType: S
-        KeySchema:
-          -
-            AttributeName: asset_id
-            KeyType: HASH
-        ProvisionedThroughput:
-          ReadCapacityUnits: 1
-          WriteCapacityUnits: 1
-        TableName: ${self:custom.dynamodb_table}
-
+        BucketName: ${self:custom.s3_bucket}
 
 provider:
   name: aws
@@ -86,25 +55,13 @@ provider:
   region: ap-southeast-2
 
   environment:
-    DYNAMODB_TABLE: ${self:custom.dynamodb_table}
-    DYNAMODB_HOST: ${self:custom.dynamodb_host}
+    TRANSCRIPTION_JOB_PREFIX: "${self:custom.stack_name}-"
     REGION: ${self:custom.region}
     S3_BUCKET: ${self:custom.s3_bucket}
-    S3_KEY_BASE: ${self:custom.s3_key_base}
-    URL_DEFAULT_TTL: ${self:custom.url_default_ttl}
+    PODCAST_NAME: ${self:custom.podcast_name}
+    PODCAST_FEED: ${self:custom.podcast_feed}
 
   iamRoleStatements:
-    - Effect: Allow
-      Action:
-        - dynamodb:Query
-        - dynamodb:Scan
-        - dynamodb:GetItem
-        - dynamodb:PutItem
-        - dynamodb:UpdateItem
-        - dynamodb:DeleteItem
-        - dynamodb:DescribeTable
-      Resource: ${self:custom.dynamodb_arn}
-
     - Effect: Allow
       Action:
         - s3:*
@@ -119,7 +76,7 @@ package:
 
 
 plugins:
-  - serverless-domain-manager
-  - serverless-reqvalidator-plugin
   - serverless-python-requirements
-  - serverless-attach-managed-policy
+#  - serverless-domain-manager
+#  - serverless-reqvalidator-plugin
+#  - serverless-attach-managed-policy
